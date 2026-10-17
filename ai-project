@@ -1,0 +1,145 @@
+================================================================================
+AI CODE DEBUGGER (STREAMLIT + GEMINI) SETUP ON AMAZON LINUX 2
+================================================================================
+
+--------------------------------------------------------------------------------
+STEP 1: LAUNCH EC2 INSTANCE (AWS FREE TIER)
+--------------------------------------------------------------------------------
+1. Go to AWS Console -> EC2 -> Launch Instance.
+2. Name: ai-debugger-app
+3. OS / AMI: Select "Amazon Linux 2 AMI (HVM) - Kernel 5.10, SSD Volume Type"
+4. Instance Type: t2.micro (Free Tier eligible)
+5. Key Pair: Select your .pem key
+6. Network Settings (Security Group):
+   - SSH (Port 22) -> Anywhere (0.0.0.0/0)
+   - Custom TCP (Port 8501) -> Anywhere (0.0.0.0/0)
+7. Click "Launch Instance".
+
+
+--------------------------------------------------------------------------------
+STEP 2: CONNECT AND INSTALL PYTHON 3.9 & DEPENDENCIES
+--------------------------------------------------------------------------------
+# 1. Connect via SSH (Note: Amazon Linux default user is 'ec2-user')
+ssh -i "your-key.pem" ec2-user@<YOUR-EC2-PUBLIC-IP>
+
+# 2. Update existing packages
+sudo yum update -y
+
+# 3. Install Python 3.9 and Git (Amazon Linux 2 default Python is 2.7/3.7)
+sudo amazon-linux-extras enable python3.8 -y || sudo yum install -y python3 python3-pip git
+sudo yum install -y python3-devel gcc
+
+# 4. Create project directory and setup virtual environment
+mkdir ai-debugger && cd ai-debugger
+python3 -m venv venv
+source venv/bin/activate
+
+# 5. Upgrade pip and install required Python libraries
+pip install --upgrade pip
+pip install streamlit google-genai
+
+
+--------------------------------------------------------------------------------
+STEP 3: CREATE THE APPLICATION FILE (app.py)
+--------------------------------------------------------------------------------
+nano app.py
+
+# Paste this exact code into app.py:
+--------------------------------------------------------------------------------
+import os
+import streamlit as st
+from google import genai
+
+st.set_page_config(page_title="AI Code Debugger", layout="centered")
+
+st.title("🐞 AI Code & Error Explainer")
+st.write("Paste your broken code or terminal error below to get an instant fix!")
+
+api_key = os.environ.get("GEMINI_API_KEY")
+if not api_key:
+    api_key = st.sidebar.text_input("Enter Gemini API Key", type="password")
+
+error_input = st.text_area(
+    "Your Broken Code or Error Log:",
+    height=180,
+    placeholder="e.g., IndexError: list index out of range or SQL syntax error..."
+)
+
+if st.button("Fix My Bug with AI"):
+    if not api_key:
+        st.warning("Please provide a Gemini API Key to proceed.")
+    elif not error_input.strip():
+        st.warning("Please paste some error logs or code first.")
+    else:
+        with st.spinner("Analyzing with AI..."):
+            try:
+                client = genai.Client(api_key=api_key)
+                prompt = f"""
+                You are a senior software engineer helping a student.
+                Analyze the following error or broken code snippet:
+                
+                {error_input}
+
+                Provide a response formatted in Markdown:
+                ### 1. What Went Wrong
+                Explain the root cause in 2 simple sentences.
+
+                ### 2. Corrected Code
+                Provide the full corrected code snippet.
+
+                ### 3. Quick Prevention Tip
+                One line on how to avoid this bug in the future.
+                """
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=prompt,
+                )
+                st.success("Analysis Complete!")
+                st.markdown(response.text)
+            except Exception as e:
+                st.error(f"Error: {e}")
+--------------------------------------------------------------------------------
+# Press Ctrl+O, hit Enter to save, then press Ctrl+X to exit nano.
+
+
+--------------------------------------------------------------------------------
+STEP 4: SETUP SYSTEMD SERVICE (RUNS 24/7 AS EC2-USER)
+--------------------------------------------------------------------------------
+# 1. Open a new service file
+sudo nano /etc/systemd/system/aidebugger.service
+
+# 2. Paste this configuration (Replace YOUR_GEMINI_API_KEY with your actual key):
+[Unit]
+Description=Streamlit AI Debugger Application
+After=network.target
+
+[Service]
+User=ec2-user
+WorkingDirectory=/home/ec2-user/ai-debugger
+Environment="PATH=/home/ec2-user/ai-debugger/venv/bin"
+Environment="GEMINI_API_KEY=YOUR_GEMINI_API_KEY"
+ExecStart=/home/ec2-user/ai-debugger/venv/bin/streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
+# Press Ctrl+O, hit Enter to save, then press Ctrl+X to exit.
+
+# 3. Reload daemon, start and enable service
+sudo systemctl daemon-reload
+sudo systemctl start aidebugger
+sudo systemctl enable aidebugger
+
+# 4. Check status (should display 'active (running)')
+sudo systemctl status aidebugger
+
+
+--------------------------------------------------------------------------------
+STEP 5: ACCESS THE APPLICATION
+--------------------------------------------------------------------------------
+Open in your browser:
+http://<YOUR-EC2-PUBLIC-IP>:8501
+================================================================================
